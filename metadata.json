@@ -1,0 +1,8 @@
+{
+  "name": "Remix FinTrack Pro — Business \u0026 RAB Finance Tracker",
+  "description": "Aplikasi SaaS manajemen keuangan bisnis, Rencana Anggaran Biaya (RAB), pencatatan arus kas, dan analisis keuangan berbasis AI untuk UMKM, kontraktor, dan manajer proyek.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
