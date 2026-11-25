@@ -29,7 +29,6 @@ import type {
 import { createBackupPayload } from '../utils/backup';
 import {
   buildIncomeBreakdown,
-  buildIncomeByCategory,
   computeCategoryMonthComparison,
   computeDashboardSummary,
   computeMonthOverMonthComparison,
@@ -262,51 +261,129 @@ export function MonthlySummaryView({
     onBackupSuccess();
   }
 
-  async function handleRunAiAnalysis() {
+  function handleRunAiAnalysis() {
     setIsAnalyzing(true);
     setAiError(null);
-    try {
-      const response = await fetch('/api/ai-insight', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          summary: monthSummary,
-          rabBreakdown: monthRabMetrics.map((r) => ({
-            category: r.category,
-            allocated: r.allocated,
-            spent: r.spent,
-            remaining: r.remaining,
-            utilizationPct: Number(r.utilizationPct.toFixed(1)),
-            status: r.status,
-          })),
-          incomeByCategory: buildIncomeByCategory(monthTransactions),
-          recentTransactions: [...monthTransactions]
-            .sort((a, b) => b.date.localeCompare(a.date))
-            .slice(0, 25),
-        }),
-      });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error ?? 'Gagal menjalankan analisis AI.');
+    window.setTimeout(() => {
+      try {
+        const totalIn = monthSummary.totalIncome;
+        const totalOut = monthSummary.totalExpense;
+        const netBalance = totalIn - totalOut;
+        const burnRate = totalIn > 0 ? (totalOut / totalIn) * 100 : totalOut > 0 ? 100 : 0;
+
+        const overBudgetCats = [...monthRabMetrics]
+          .filter((r) => r.allocated > 0 && r.spent > r.allocated)
+          .sort((a, b) => b.spent - b.allocated - (a.spent - a.allocated));
+
+        const nearLimitCats = [...monthRabMetrics]
+          .filter(
+            (r) =>
+              r.allocated > 0 &&
+              r.spent <= r.allocated &&
+              r.utilizationPct >= 80
+          )
+          .sort((a, b) => b.utilizationPct - a.utilizationPct);
+
+        const topSpendCat = [...monthRabMetrics]
+          .filter((r) => r.spent > 0)
+          .sort((a, b) => b.spent - a.spent)[0];
+
+        let healthStatus: AiInsightReport['healthStatus'] = 'Sehat';
+        if (netBalance < 0 || overBudgetCats.length >= 2 || burnRate > 95) {
+          healthStatus = 'Kritis';
+        } else if (
+          overBudgetCats.length === 1 ||
+          nearLimitCats.length > 0 ||
+          burnRate > 75
+        ) {
+          healthStatus = 'Perlu Perhatian';
+        }
+
+        const executiveSummary =
+          totalIn === 0 && totalOut === 0
+            ? `Belum ada aktivitas pemasukan maupun pengeluaran tercatat pada ${mom.currentMonthLabel}. Mulai catat transaksi harian agar asisten dapat memetakan pola keuanganmu.`
+            : netBalance >= 0
+              ? `Pada ${mom.currentMonthLabel}, total pemasukan tercatat ${formatCompactRupiah(totalIn)} dengan pengeluaran ${formatCompactRupiah(totalOut)} (${burnRate.toFixed(0)}% terpakai). Kamu masih memiliki surplus bersih sebesar ${formatCompactRupiah(netBalance)}.`
+              : `Waspada! Pengeluaran pada ${mom.currentMonthLabel} (${formatCompactRupiah(totalOut)}) melampaui total pemasukan (${formatCompactRupiah(totalIn)}) sehingga terjadi defisit sebesar ${formatCompactRupiah(Math.abs(netBalance))}.`;
+
+        const cashflowEvaluation =
+          overBudgetCats.length > 0
+            ? `Terdapat ${overBudgetCats.length} pos anggaran yang melewati batas jatah bulan ini, dipimpin oleh ${overBudgetCats[0].category} (terpakai ${formatCompactRupiah(overBudgetCats[0].spent)} dari jatah ${formatCompactRupiah(overBudgetCats[0].allocated)}).`
+            : nearLimitCats.length > 0
+              ? `Seluruh pos masih di bawah pagu, namun ${nearLimitCats[0].category} sudah terpakai ${nearLimitCats[0].utilizationPct.toFixed(0)}% (sisa ${formatCompactRupiah(nearLimitCats[0].remaining)}).`
+              : topSpendCat
+                ? `Alokasi pengeluaranmu terkendali. Pos pengeluaran terbesar saat ini adalah ${topSpendCat.category} sebesar ${formatCompactRupiah(topSpendCat.spent)}.`
+                : `Arus kas bulan ini berjalan stabil tanpa pembengkakan kategori anggaran.`;
+
+        const tacticalSavings: Array<{ title: string; action: string }> = [];
+
+        if (overBudgetCats.length > 0) {
+          const topOver = overBudgetCats[0];
+          const excess = topOver.spent - topOver.allocated;
+          tacticalSavings.push({
+            title: `Rem Pos ${topOver.category}`,
+            action: `Kategori ini sudah jebol ${formatCompactRupiah(excess)} dari jatah bulanan. Hentikan dulu pengeluaran non-esensial di pos ${topOver.category} sampai ganti bulan.`,
+          });
+        } else if (nearLimitCats.length > 0) {
+          const topNear = nearLimitCats[0];
+          tacticalSavings.push({
+            title: `Jaga Sisa ${topNear.category}`,
+            action: `Sisa jatah ${topNear.category} tinggal ${formatCompactRupiah(topNear.remaining)}. Bagi rata sisa tersebut untuk hari-hari tersisa agar tidak over-budget.`,
+          });
+        } else if (topSpendCat) {
+          const targetSave = Math.round(topSpendCat.spent * 0.15);
+          tacticalSavings.push({
+            title: `Efisiensi 15% di ${topSpendCat.category}`,
+            action: `Sebagai pos terbesar (${formatCompactRupiah(topSpendCat.spent)}), memangkas 15% pengeluaran di kategori ini bisa menghemat sekitar ${formatCompactRupiah(targetSave)} per bulan.`,
+          });
+        }
+
+        if (mom.expense.direction === 'up' && mom.expense.deltaPct !== null && mom.expense.deltaPct > 5) {
+          tacticalSavings.push({
+            title: `Tekan Kenaikan Pengeluaran (+${mom.expense.deltaPct.toFixed(0)}%)`,
+            action: `Total pengeluaranmu naik dibanding ${mom.previousMonthLabel}. Cek daftar riwayat transaksi minggu terakhir untuk menyaring pengeluaran impulsif.`,
+          });
+        } else {
+          const safeWeekly = netBalance > 0 ? Math.floor(netBalance / 4) : 0;
+          tacticalSavings.push({
+            title: 'Terapkan Batas Jajan Mingguan',
+            action:
+              safeWeekly > 0
+                ? `Dengan sisa saldo ${formatCompactRupiah(netBalance)}, batasi pengeluaran fleksibel maksimal ${formatCompactRupiah(safeWeekly)} per minggu agar aman hingga akhir bulan.`
+                : 'Prioritaskan kebutuhan pokok (makan, kos, transport) dan tunda pembelian keinginan sampai ada pemasukan tambahan.',
+          });
+        }
+
+        const recommendedSave = totalIn > 0 ? Math.round(totalIn * 0.2) : 0;
+        tacticalSavings.push({
+          title: 'Amankan Tabungan di Awal',
+          action:
+            recommendedSave > 0
+              ? `Sisihkan minimal 20% dari pemasukan (sekitar ${formatCompactRupiah(recommendedSave)}) di awal menerima uang saku/gaji sebelum dipakai untuk kebutuhan harian.`
+              : 'Buat pos kategori "Tabungan" di menu Budget agar setiap pemasukan baru langsung memiliki target simpanan yang jelas.',
+        });
+
+        setAiReport({
+          healthStatus,
+          executiveSummary,
+          cashflowEvaluation,
+          tacticalSavings: tacticalSavings.slice(0, 3),
+          generatedAt: new Date().toLocaleTimeString('id-ID', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        });
+      } catch (err: unknown) {
+        setAiError(
+          err instanceof Error
+            ? err.message
+            : 'Terjadi kesalahan saat menganalisis data budget.'
+        );
+      } finally {
+        setIsAnalyzing(false);
       }
-
-      setAiReport({
-        ...data,
-        generatedAt: new Date().toLocaleTimeString('id-ID', {
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-      });
-    } catch (err: unknown) {
-      setAiError(
-        err instanceof Error
-          ? err.message
-          : 'Terjadi kesalahan saat menghubungi layanan AI Advisor.'
-      );
-    } finally {
-      setIsAnalyzing(false);
-    }
+    }, 350);
   }
 
   return (
@@ -728,159 +805,4 @@ export function MonthlySummaryView({
             )}
             {biggestSaving && (
               <div className="flex items-start gap-3 rounded-xl border border-emerald-200/70 bg-emerald-50/70 p-3.5">
-                <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
-                <div className="text-xs">
-                  <p className="font-semibold text-emerald-900">
-                    Penghematan Terbesar: {biggestSaving.category}
-                  </p>
-                  <p className="mt-0.5 font-mono text-emerald-800 tabular-nums">
-                    {formatCompactRupiah(biggestSaving.diff)} pada {formatMonthLabel(catMonthB)}
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-600">
-                <th className="py-3 pl-6 pr-3">Kategori</th>
-                <th className="px-3 py-3 text-right">{formatMonthLabel(catMonthA, true)}</th>
-                <th className="px-3 py-3 text-right">{formatMonthLabel(catMonthB, true)}</th>
-                <th className="py-3 pl-3 pr-6 text-right">Selisih</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {categoryDiffs.map((item) => (
-                <tr key={item.category} className="hover:bg-slate-50/70">
-                  <td className="py-3 pl-6 pr-3 text-xs font-semibold text-slate-900 sm:text-sm">
-                    {item.category}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-right font-mono text-xs text-slate-600 tabular-nums">
-                    {formatCompactRupiah(item.amountA)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-right font-mono text-xs font-medium text-slate-900 tabular-nums">
-                    {formatCompactRupiah(item.amountB)}
-                  </td>
-                  <td
-                    className={`whitespace-nowrap py-3 pl-3 pr-6 text-right font-mono text-xs font-semibold tabular-nums ${
-                      item.diff > 0
-                        ? 'text-rose-700'
-                        : item.diff < 0
-                          ? 'text-emerald-700'
-                          : 'text-slate-500'
-                    }`}
-                  >
-                    {item.diff > 0 ? '+' : ''}
-                    {formatCompactRupiah(item.diff)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* Asisten Hemat AI */}
-      <section className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="font-display text-base font-bold text-slate-900">
-              Asisten Hemat AI
-            </h3>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Cek pos pengeluaran yang bocor dan dapatkan 3 tips hemat praktis untuk {mom.currentMonthLabel}.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={handleRunAiAnalysis}
-            disabled={isAnalyzing}
-            className="inline-flex min-h-[42px] items-center justify-center gap-2 self-start whitespace-nowrap rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60 sm:self-center"
-          >
-            {isAnalyzing ? (
-              <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <BrainCircuit className="h-4 w-4" aria-hidden="true" />
-            )}
-            {isAnalyzing ? 'Menganalisis...' : 'Analisis Budget dengan AI'}
-          </button>
-        </div>
-
-        {!isAnalyzing && aiError && (
-          <div
-            className="mt-4 flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 sm:flex-row sm:items-center sm:justify-between"
-            role="alert"
-          >
-            <div className="flex items-start gap-2.5 text-xs text-rose-800">
-              <AlertOctagon className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" aria-hidden="true" />
-              <span>{aiError}</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleRunAiAnalysis}
-              className="self-start whitespace-nowrap rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-            >
-              Coba Lagi
-            </button>
-          </div>
-        )}
-
-        {!isAnalyzing && !aiError && aiReport && (
-          <div className="mt-5 space-y-5 border-t border-slate-100 pt-5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                {aiReport.healthStatus === 'Kritis' ? (
-                  <AlertOctagon className="h-5 w-5 text-rose-600" aria-hidden="true" />
-                ) : aiReport.healthStatus === 'Perlu Perhatian' ? (
-                  <AlertTriangle className="h-5 w-5 text-amber-600" aria-hidden="true" />
-                ) : (
-                  <CheckCircle2 className="h-5 w-5 text-emerald-600" aria-hidden="true" />
-                )}
-                <span className="text-sm font-bold text-slate-900">
-                  Kondisi Dompet: {aiReport.healthStatus}
-                </span>
-              </div>
-              <span className="font-mono text-xs text-slate-500">
-                Pukul {aiReport.generatedAt}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <p className="rounded-xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-700">
-                {aiReport.executiveSummary}
-              </p>
-              <p className="rounded-xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-700">
-                {aiReport.cashflowEvaluation}
-              </p>
-            </div>
-
-            {aiReport.tacticalSavings.length > 0 && (
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                {aiReport.tacticalSavings.slice(0, 3).map((tip, idx) => (
-                  <div
-                    key={`${tip.title}-${idx}`}
-                    className="rounded-xl border border-slate-200/70 bg-white p-4"
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700">
-                      <Lightbulb className="h-3.5 w-3.5" aria-hidden="true" />
-                      Tips Hemat {idx + 1}
-                    </div>
-                    <p className="mt-1.5 text-sm font-semibold text-slate-900">
-                      {tip.title}
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                      {tip.action}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
+                <TrendingDown className="mt-0.5 h-4
