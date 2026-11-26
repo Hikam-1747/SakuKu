@@ -177,7 +177,7 @@ export function MonthlySummaryView({
 
   const activeRefMonth = referenceMonth || availableMonths[0].key;
   const mom = computeMonthOverMonthComparison(transactions, activeRefMonth);
-  const monthlyRows = computeMonthlyRows(rabItems, transactions, 6);
+  const monthlyRows = computeMonthlyRows(rabItems, transactions, 12);
   const monthlyRowsDesc = [...monthlyRows].reverse();
 
   const monthTransactions = filterTransactionsByPeriod(transactions, activeRefMonth);
@@ -521,7 +521,7 @@ export function MonthlySummaryView({
                 </h3>
               </div>
               <p className="mt-0.5 text-xs text-slate-500">
-                Pemasukan vs Jatah Anggaran vs Terpakai hingga 6 bulan terakhir.
+                Pemasukan vs Jatah Anggaran vs Terpakai hingga 12 bulan terakhir.
               </p>
             </div>
             <div
@@ -861,7 +861,7 @@ export function MonthlySummaryView({
       </section>
 
       {/* Asisten Hemat AI (Smart Local Analyzer — 100% Offline & Gratis) */}
-      <section className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm sm:p-6">
+      <section className="rounded-3xl border border-indigo-100 bg-gradient-to-br from-white via-white to-indigo-50/40 p-5 shadow-sm sm:p-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="font-display text-base font-bold text-slate-900">
